@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian'
-import { normalizeServerUrl, type ProvisionedDestination, type ProvisioningApi } from './provision.js'
+import { normalizeServerUrl, type ProvisioningApi, type VaultConnection } from './provision.js'
 import type { DeliveryApi, DestinationSummary, OutboxItem } from './types.js'
 
 interface ErrorPayload { error?: unknown }
@@ -29,8 +29,13 @@ export class HtmlToMdProvisioningApi implements ProvisioningApi {
     this.root = normalizeServerUrl(serverUrl)
   }
 
-  async registerVault(name: string): Promise<ProvisionedDestination> {
-    return requestJson(`${this.root}/api/v1/admin/destinations`, this.adminToken, 'POST', { name })
+  async listDestinations(): Promise<DestinationSummary[]> {
+    const response = await requestJson<{ destinations: DestinationSummary[] }>(`${this.root}/api/v1/admin/destinations`, this.adminToken)
+    return response.destinations
+  }
+
+  async connectVault(destinationId: string, vaultName: string): Promise<VaultConnection> {
+    return requestJson(`${this.root}/api/v1/admin/destinations/${destinationId}/vault-connection`, this.adminToken, 'POST', { vaultName })
   }
 }
 

@@ -1,11 +1,13 @@
-export interface ProvisionedDestination {
-  destination: { id: string; name: string }
-  captureToken: string
+import type { DestinationSummary } from './types.js'
+
+export interface VaultConnection {
+  destination: DestinationSummary
   syncToken: string
 }
 
 export interface ProvisioningApi {
-  registerVault(name: string): Promise<ProvisionedDestination>
+  listDestinations(): Promise<DestinationSummary[]>
+  connectVault(destinationId: string, vaultName: string): Promise<VaultConnection>
 }
 
 export interface SecretWriter {
@@ -15,7 +17,6 @@ export interface SecretWriter {
 export interface ProvisionedReferences {
   destinationId: string
   destinationName: string
-  captureSecretName: string
   syncSecretName: string
 }
 
@@ -36,32 +37,26 @@ export function normalizeServerUrl(value: string): string {
   return url.origin
 }
 
-export function captureEndpoint(serverUrl: string, destinationId: string): string {
-  return `${normalizeServerUrl(serverUrl)}/api/v1/destinations/${destinationId}/captures`
-}
-
-export async function provisionVault(
+export async function connectVault(
   api: ProvisioningApi,
   secrets: SecretWriter,
+  destinationId: string,
   vaultName: string,
 ): Promise<ProvisionedReferences> {
   const name = vaultName.trim()
   if (name === '') throw new Error('The Obsidian vault name is empty.')
-  const created = await api.registerVault(name)
-  const syncSecretName = `htmltomd-sync-${created.destination.id}`
-  const captureSecretName = `htmltomd-capture-${created.destination.id}`
+  if (destinationId.trim() === '') throw new Error('Select a capture destination.')
+  const connected = await api.connectVault(destinationId, name)
+  const syncSecretName = `htmltomd-sync-${connected.destination.id}`
   try {
-    secrets.setSecret(syncSecretName, created.syncToken)
-    secrets.setSecret(captureSecretName, created.captureToken)
+    secrets.setSecret(syncSecretName, connected.syncToken)
   } catch (error) {
     secrets.setSecret(syncSecretName, '')
-    secrets.setSecret(captureSecretName, '')
     throw error
   }
   return {
-    destinationId: created.destination.id,
-    destinationName: created.destination.name,
-    captureSecretName,
+    destinationId: connected.destination.id,
+    destinationName: connected.destination.name,
     syncSecretName,
   }
 }

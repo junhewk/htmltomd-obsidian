@@ -7,16 +7,15 @@ import {
   type App,
 } from 'obsidian'
 import { HtmlToMdApi, HtmlToMdProvisioningApi } from './api.js'
-import { captureEndpoint, normalizeServerUrl, provisionVault } from './provision.js'
+import { connectVault, normalizeServerUrl } from './provision.js'
 import { syncOutbox } from './sync.js'
-import type { VaultPort } from './types.js'
+import type { DestinationSummary, VaultPort } from './types.js'
 
 interface HtmlToMdSettings {
   serverUrl: string
   destinationId: string
   destinationName: string
   secretName: string
-  captureSecretName: string
   targetFolder: string
   pollSeconds: number
 }
@@ -26,7 +25,6 @@ const DEFAULT_SETTINGS: HtmlToMdSettings = {
   destinationId: '',
   destinationName: '',
   secretName: '',
-  captureSecretName: '',
   targetFolder: 'Clippings',
   pollSeconds: 60,
 }
@@ -63,17 +61,23 @@ export default class HtmlToMdPlugin extends Plugin {
   settings: HtmlToMdSettings = DEFAULT_SETTINGS
   private status: HTMLElement | null = null
   private syncing = false
-  private provisioning = false
+  private connecting = false
   private lastReviewCount = 0
 
   async onload(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...((await this.loadData()) as Partial<HtmlToMdSettings> | null) }
+    const saved = (await this.loadData()) as Partial<HtmlToMdSettings> | null
+    this.settings = {
+      serverUrl: saved?.serverUrl ?? DEFAULT_SETTINGS.serverUrl,
+      destinationId: saved?.destinationId ?? DEFAULT_SETTINGS.destinationId,
+      destinationName: saved?.destinationName ?? DEFAULT_SETTINGS.destinationName,
+      secretName: saved?.secretName ?? DEFAULT_SETTINGS.secretName,
+      targetFolder: saved?.targetFolder ?? DEFAULT_SETTINGS.targetFolder,
+      pollSeconds: saved?.pollSeconds ?? DEFAULT_SETTINGS.pollSeconds,
+    }
     this.status = this.addStatusBarItem()
     this.status.setText('htmltomd: not configured')
     this.addSettingTab(new HtmlToMdSettingTab(this.app, this))
     this.addCommand({ id: 'sync-now', name: 'Sync captures now', callback: () => void this.syncNow(true) })
-    this.addCommand({ id: 'copy-capture-endpoint', name: 'Copy Shortcut capture endpoint', callback: () => void this.copyCaptureEndpoint() })
-    this.addCommand({ id: 'copy-capture-token', name: 'Copy Shortcut capture token', callback: () => void this.copyCaptureToken() })
     this.app.workspace.onLayoutReady(() => void this.syncNow(false))
     this.registerInterval(window.setInterval(() => void this.syncNow(false), this.settings.pollSeconds * 1_000))
   }
@@ -86,58 +90,42 @@ export default class HtmlToMdPlugin extends Plugin {
     return this.settings.serverUrl !== '' && this.settings.destinationId !== '' && this.settings.secretName !== ''
   }
 
-  async registerVault(adminToken: string): Promise<void> {
-    if (this.provisioning) throw new Error('Vault registration is already in progress.')
+  async listCaptureDestinations(adminToken: string): Promise<DestinationSummary[]> {
     if (adminToken.trim() === '') throw new Error('Enter the server administration token.')
-    this.provisioning = true
+    const serverUrl = normalizeServerUrl(this.settings.serverUrl)
+    return new HtmlToMdProvisioningApi(serverUrl, adminToken.trim()).listDestinations()
+  }
+
+  async connectVault(adminToken: string, destinationId: string): Promise<void> {
+    if (this.connecting) throw new Error('Vault connection is already in progress.')
+    if (adminToken.trim() === '') throw new Error('Enter the server administration token.')
+    this.connecting = true
     const previous = this.settings
-    let references: Awaited<ReturnType<typeof provisionVault>> | null = null
+    let references: Awaited<ReturnType<typeof connectVault>> | null = null
     try {
       const serverUrl = normalizeServerUrl(this.settings.serverUrl)
       const api = new HtmlToMdProvisioningApi(serverUrl, adminToken.trim())
-      references = await provisionVault(api, this.app.secretStorage, this.app.vault.getName())
+      references = await connectVault(api, this.app.secretStorage, destinationId, this.app.vault.getName())
       this.settings = {
         ...this.settings,
         serverUrl,
         destinationId: references.destinationId,
         destinationName: references.destinationName,
         secretName: references.syncSecretName,
-        captureSecretName: references.captureSecretName,
       }
       await this.saveSettings()
       this.status?.setText('htmltomd: configured')
-      new Notice(`htmltomd registered ${references.destinationName}.`)
+      new Notice(`htmltomd connected this vault to ${references.destinationName}.`)
       await this.syncNow(false)
     } catch (error) {
       this.settings = previous
       if (references !== null) {
         this.app.secretStorage.setSecret(references.syncSecretName, '')
-        this.app.secretStorage.setSecret(references.captureSecretName, '')
       }
       throw error
     } finally {
-      this.provisioning = false
+      this.connecting = false
     }
-  }
-
-  async copyCaptureEndpoint(): Promise<void> {
-    if (this.settings.serverUrl === '' || this.settings.destinationId === '') {
-      new Notice('Register this vault first.')
-      return
-    }
-    const endpoint = captureEndpoint(this.settings.serverUrl, this.settings.destinationId)
-    await navigator.clipboard.writeText(endpoint)
-    new Notice('Shortcut capture endpoint copied.')
-  }
-
-  async copyCaptureToken(): Promise<void> {
-    const token = this.app.secretStorage.getSecret(this.settings.captureSecretName)
-    if (!token) {
-      new Notice('The stored capture token is missing. Rotate it from the server admin console.')
-      return
-    }
-    await navigator.clipboard.writeText(token)
-    new Notice('Shortcut capture token copied. Treat the clipboard contents as a password.')
   }
 
   async syncNow(showNotice: boolean): Promise<void> {
@@ -190,14 +178,8 @@ class HtmlToMdSettingTab extends PluginSettingTab {
       return
     }
     new Setting(this.containerEl)
-      .setName('Registered vault')
-      .setDesc(`${this.plugin.settings.destinationName || this.app.vault.getName()} · Destination ID: ${this.plugin.settings.destinationId}`)
-    new Setting(this.containerEl).setName('iPhone capture endpoint').setDesc('Use as the Get Contents of URL address in Shortcuts.').addButton((button) =>
-      button.setButtonText('Copy endpoint').onClick(() => void this.plugin.copyCaptureEndpoint()),
-    )
-    new Setting(this.containerEl).setName('iPhone capture token').setDesc('Use as the Bearer authorization value in Shortcuts.').addButton((button) =>
-      button.setButtonText('Copy token').onClick(() => void this.plugin.copyCaptureToken()),
-    )
+      .setName('Connected destination')
+      .setDesc(`${this.plugin.settings.destinationName} · Destination ID: ${this.plugin.settings.destinationId}`)
     new Setting(this.containerEl).setName('Destination folder').addText((text) =>
       text.setValue(this.plugin.settings.targetFolder).onChange(async (value) => {
         this.plugin.settings.targetFolder = normalizePath(value.trim() || 'Clippings')
@@ -218,22 +200,56 @@ class HtmlToMdSettingTab extends PluginSettingTab {
   private displayRegistration(): void {
     let adminToken = ''
     new Setting(this.containerEl)
-      .setName('Register this vault')
-      .setDesc(`Create a private server destination for “${this.app.vault.getName()}”. The admin token is used once and is not saved.`)
+      .setName('Connect this vault')
+      .setDesc(`Select an existing iPhone capture destination for “${this.app.vault.getName()}”. The admin token is used once and is not saved.`)
       .addText((text) => {
         text.setPlaceholder('ADMIN_TOKEN').onChange((value) => { adminToken = value })
         text.inputEl.type = 'password'
       })
-      .addButton((button) => button.setButtonText('Register this vault').setCta().onClick(async () => {
+      .addButton((button) => button.setButtonText('Load destinations').setCta().onClick(async () => {
         button.setDisabled(true)
         try {
-          await this.plugin.registerVault(adminToken)
-          adminToken = ''
-          this.display()
+          const destinations = await this.plugin.listCaptureDestinations(adminToken)
+          destinationSettings.empty()
+          if (destinations.length === 0) {
+            new Setting(destinationSettings)
+              .setName('No capture destinations')
+              .setDesc('Open the htmltomd server page and create an iPhone Shortcut first.')
+            return
+          }
+          let destinationId = destinations[0]?.id ?? ''
+          new Setting(destinationSettings)
+            .setName('Capture destination')
+            .setDesc('Ready captures already in this destination will be imported after connection.')
+            .addDropdown((dropdown) => {
+              for (const destination of destinations) {
+                const connection = destination.vaultName === null ? 'not connected' : `connected to ${destination.vaultName}`
+                dropdown.addOption(destination.id, `${destination.name} (${connection})`)
+              }
+              dropdown.setValue(destinationId).onChange((value) => { destinationId = value })
+            })
+            .addButton((connectButton) => connectButton.setButtonText('Connect this vault').setCta().onClick(async () => {
+              const destination = destinations.find((candidate) => candidate.id === destinationId)
+              if (destination === undefined) return
+              if (destination.vaultName !== null && !window.confirm(
+                `${destination.name} is connected to ${destination.vaultName}. Reconnecting invalidates that plugin's sync credential. Continue?`,
+              )) return
+              connectButton.setDisabled(true)
+              try {
+                await this.plugin.connectVault(adminToken, destination.id)
+                adminToken = ''
+                this.display()
+              } catch (error) {
+                new Notice(`htmltomd connection failed: ${(error as Error).message}`)
+                connectButton.setDisabled(false)
+              }
+            }))
         } catch (error) {
-          new Notice(`htmltomd registration failed: ${(error as Error).message}`)
+          new Notice(`htmltomd destination loading failed: ${(error as Error).message}`)
+        } finally {
           button.setDisabled(false)
         }
       }))
+    const destinationSettings = this.containerEl.createDiv()
   }
 }

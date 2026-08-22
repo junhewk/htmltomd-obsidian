@@ -10,6 +10,10 @@ export interface OutboxItem {
 export interface DestinationSummary {
   id: string
   name: string
+  vaultName: string | null
+  vaultConnectedAt: string | null
+  createdAt: string
+  lastSeenAt: string | null
   counts: {
     queued: number
     processing: number

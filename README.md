@@ -9,14 +9,12 @@ only then acknowledges delivery.
 Install BRAT, choose **Add a beta plugin**, and enter this repository's GitHub path.
 Releases provide matching `manifest.json`, `main.js`, and optional `styles.css` assets.
 
-In plugin settings, enter the server URL and the server `ADMIN_TOKEN`, then choose
-**Register this vault**. The token is used for that request only and is not saved. The
-plugin registers the current vault name and stores its capture and sync credentials in
-Obsidian SecretStorage. The default target folder is `Clippings`.
-
-Use the settings buttons or the **Copy Shortcut capture endpoint/token** commands to set
-up the iPhone Shortcut. The iPhone must use the capture token, never the sync or admin
-token.
+Create the signed iPhone Shortcut from the server administration page first; Obsidian is
+not required for capture. Later, enter the server URL and `ADMIN_TOKEN` in plugin settings,
+choose **Load destinations**, select the existing capture destination, and choose
+**Connect this vault**. The admin token is not saved, and only the resulting sync
+credential is stored in Obsidian SecretStorage. Existing ready captures are imported into
+the default `Clippings` folder immediately after connection.
 
 ## Development
 
