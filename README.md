@@ -6,8 +6,19 @@ only then acknowledges delivery.
 
 ## Install with BRAT
 
-Install BRAT, choose **Add a beta plugin**, and enter this repository's GitHub path.
-Releases provide matching `manifest.json`, `main.js`, and optional `styles.css` assets.
+Install BRAT, choose **Add beta plugin**, and enter:
+
+```text
+junhewk/htmltomd-obsidian
+```
+
+BRAT has no plugin directory to browse; the repository path is typed in. Builds are
+published as GitHub pre-releases, which BRAT selects automatically by highest semantic
+version, and each release carries matching `manifest.json` and `main.js` assets.
+
+To install without BRAT, download those two assets from the
+[latest release](https://github.com/junhewk/htmltomd-obsidian/releases) into
+`<vault>/.obsidian/plugins/htmltomd-sync/`, then enable the plugin.
 
 Connect an iPhone from the server administration page first; Obsidian is not required for
 capture. Then, on that page, choose **Connect Obsidian** on the capture destination, enter
