@@ -21,7 +21,8 @@ interface HtmlToMdSettings {
 }
 
 const DEFAULT_SETTINGS: HtmlToMdSettings = {
-  serverUrl: 'http://192.0.2.10:8787',
+  // The vault connection link carries the server origin, so there is nothing to default to.
+  serverUrl: '',
   destinationId: '',
   destinationName: '',
   secretName: '',
@@ -164,7 +165,7 @@ class HtmlToMdSettingTab extends PluginSettingTab {
       return
     }
     new Setting(this.containerEl).setName('Server URL').addText((text) =>
-      text.setPlaceholder('http://192.0.2.10:8787').setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
+      text.setPlaceholder('http://your-server:8787').setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
         this.plugin.settings.serverUrl = value.trim()
         await this.plugin.saveSettings()
       }),

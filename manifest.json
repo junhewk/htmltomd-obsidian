@@ -1,7 +1,7 @@
 {
   "id": "htmltomd-sync",
   "name": "htmltomd Sync",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "minAppVersion": "1.11.4",
   "description": "Imports validated htmltomd captures and verifies each vault write.",
   "author": "htmltomd contributors",
