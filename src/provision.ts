@@ -1,13 +1,9 @@
 import type { DestinationSummary } from './types.js'
 
-export interface VaultConnection {
-  destination: DestinationSummary
+export interface VaultLink {
+  serverUrl: string
+  destinationId: string
   syncToken: string
-}
-
-export interface ProvisioningApi {
-  listDestinations(): Promise<DestinationSummary[]>
-  connectVault(destinationId: string, vaultName: string): Promise<VaultConnection>
 }
 
 export interface SecretWriter {
@@ -15,10 +11,14 @@ export interface SecretWriter {
 }
 
 export interface ProvisionedReferences {
+  serverUrl: string
   destinationId: string
   destinationName: string
   syncSecretName: string
 }
+
+/** Confirms a link before its credential is stored, and reports the destination it opens. */
+export type DestinationProbe = (link: VaultLink) => Promise<DestinationSummary>
 
 export function normalizeServerUrl(value: string): string {
   const text = value.trim().replace(/\/+$/, '')
@@ -37,26 +37,56 @@ export function normalizeServerUrl(value: string): string {
   return url.origin
 }
 
-export async function connectVault(
-  api: ProvisioningApi,
-  secrets: SecretWriter,
-  destinationId: string,
-  vaultName: string,
-): Promise<ProvisionedReferences> {
-  const name = vaultName.trim()
-  if (name === '') throw new Error('The Obsidian vault name is empty.')
-  if (destinationId.trim() === '') throw new Error('Select a capture destination.')
-  const connected = await api.connectVault(destinationId, name)
-  const syncSecretName = `htmltomd-sync-${connected.destination.id}`
+export function syncSecretName(destinationId: string): string {
+  return `htmltomd-sync-${destinationId}`
+}
+
+/**
+ * Reads the one-time vault link issued by the server administration page. The link carries
+ * the destination and its sync credential so the administration token never reaches Obsidian.
+ */
+export function parseVaultLink(value: string): VaultLink {
+  const text = value.trim()
+  if (text === '') throw new Error('Paste the vault connection link from the htmltomd server page.')
+  let link: URL
   try {
-    secrets.setSecret(syncSecretName, connected.syncToken)
+    link = new URL(text)
+  } catch {
+    throw new Error('That is not a valid vault connection link.')
+  }
+  if (link.protocol !== 'htmltomd:' || link.host !== 'vault') {
+    throw new Error('Paste the htmltomd://vault link shown by the server page.')
+  }
+  const server = link.searchParams.get('server') ?? ''
+  const destinationId = (link.searchParams.get('destination') ?? '').trim()
+  const syncToken = (link.searchParams.get('token') ?? '').trim()
+  if (destinationId === '') throw new Error('The vault connection link has no destination.')
+  if (syncToken === '') throw new Error('The vault connection link has no sync credential.')
+  return { serverUrl: normalizeServerUrl(server), destinationId, syncToken }
+}
+
+/**
+ * Verifies the pasted link against the server before storing anything, then keeps only the
+ * SecretStorage reference in plugin data.
+ */
+export async function connectVaultLink(
+  value: string,
+  secrets: SecretWriter,
+  probe: DestinationProbe,
+): Promise<ProvisionedReferences> {
+  const link = parseVaultLink(value)
+  const destination = await probe(link)
+  const secretName = syncSecretName(link.destinationId)
+  try {
+    secrets.setSecret(secretName, link.syncToken)
   } catch (error) {
-    secrets.setSecret(syncSecretName, '')
+    secrets.setSecret(secretName, '')
     throw error
   }
   return {
-    destinationId: connected.destination.id,
-    destinationName: connected.destination.name,
-    syncSecretName,
+    serverUrl: link.serverUrl,
+    destinationId: link.destinationId,
+    destinationName: destination.name,
+    syncSecretName: secretName,
   }
 }

@@ -1,5 +1,5 @@
 import { requestUrl } from 'obsidian'
-import { normalizeServerUrl, type ProvisioningApi, type VaultConnection } from './provision.js'
+import { normalizeServerUrl } from './provision.js'
 import type { DeliveryApi, DestinationSummary, OutboxItem } from './types.js'
 
 interface ErrorPayload { error?: unknown }
@@ -22,23 +22,6 @@ async function requestJson<T>(url: string, token: string, method = 'GET', body?:
   return response.json as T
 }
 
-export class HtmlToMdProvisioningApi implements ProvisioningApi {
-  private readonly root: string
-
-  constructor(serverUrl: string, private readonly adminToken: string) {
-    this.root = normalizeServerUrl(serverUrl)
-  }
-
-  async listDestinations(): Promise<DestinationSummary[]> {
-    const response = await requestJson<{ destinations: DestinationSummary[] }>(`${this.root}/api/v1/admin/destinations`, this.adminToken)
-    return response.destinations
-  }
-
-  async connectVault(destinationId: string, vaultName: string): Promise<VaultConnection> {
-    return requestJson(`${this.root}/api/v1/admin/destinations/${destinationId}/vault-connection`, this.adminToken, 'POST', { vaultName })
-  }
-}
-
 export class HtmlToMdApi implements DeliveryApi {
   private readonly root: string
 
@@ -47,7 +30,7 @@ export class HtmlToMdApi implements DeliveryApi {
     private readonly destinationId: string,
     private readonly token: string,
   ) {
-    this.root = serverUrl.replace(/\/+$/, '')
+    this.root = normalizeServerUrl(serverUrl)
   }
 
   private async json<T>(path: string, method = 'GET', body?: object): Promise<T> {

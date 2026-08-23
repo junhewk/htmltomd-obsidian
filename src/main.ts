@@ -6,10 +6,10 @@ import {
   normalizePath,
   type App,
 } from 'obsidian'
-import { HtmlToMdApi, HtmlToMdProvisioningApi } from './api.js'
-import { connectVault, normalizeServerUrl } from './provision.js'
+import { HtmlToMdApi } from './api.js'
+import { connectVaultLink, type VaultLink } from './provision.js'
 import { syncOutbox } from './sync.js'
-import type { DestinationSummary, VaultPort } from './types.js'
+import type { VaultPort } from './types.js'
 
 interface HtmlToMdSettings {
   serverUrl: string
@@ -90,25 +90,17 @@ export default class HtmlToMdPlugin extends Plugin {
     return this.settings.serverUrl !== '' && this.settings.destinationId !== '' && this.settings.secretName !== ''
   }
 
-  async listCaptureDestinations(adminToken: string): Promise<DestinationSummary[]> {
-    if (adminToken.trim() === '') throw new Error('Enter the server administration token.')
-    const serverUrl = normalizeServerUrl(this.settings.serverUrl)
-    return new HtmlToMdProvisioningApi(serverUrl, adminToken.trim()).listDestinations()
-  }
-
-  async connectVault(adminToken: string, destinationId: string): Promise<void> {
+  async connectVaultLink(link: string): Promise<void> {
     if (this.connecting) throw new Error('Vault connection is already in progress.')
-    if (adminToken.trim() === '') throw new Error('Enter the server administration token.')
     this.connecting = true
     const previous = this.settings
-    let references: Awaited<ReturnType<typeof connectVault>> | null = null
+    let references: Awaited<ReturnType<typeof connectVaultLink>> | null = null
     try {
-      const serverUrl = normalizeServerUrl(this.settings.serverUrl)
-      const api = new HtmlToMdProvisioningApi(serverUrl, adminToken.trim())
-      references = await connectVault(api, this.app.secretStorage, destinationId, this.app.vault.getName())
+      references = await connectVaultLink(link, this.app.secretStorage, (parsed: VaultLink) =>
+        new HtmlToMdApi(parsed.serverUrl, parsed.destinationId, parsed.syncToken).summary())
       this.settings = {
         ...this.settings,
-        serverUrl,
+        serverUrl: references.serverUrl,
         destinationId: references.destinationId,
         destinationName: references.destinationName,
         secretName: references.syncSecretName,
@@ -167,16 +159,16 @@ class HtmlToMdSettingTab extends PluginSettingTab {
 
   display(): void {
     this.containerEl.empty()
+    if (!this.plugin.configured()) {
+      this.displayRegistration()
+      return
+    }
     new Setting(this.containerEl).setName('Server URL').addText((text) =>
       text.setPlaceholder('http://192.0.2.10:8787').setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
         this.plugin.settings.serverUrl = value.trim()
         await this.plugin.saveSettings()
       }),
     )
-    if (!this.plugin.configured()) {
-      this.displayRegistration()
-      return
-    }
     new Setting(this.containerEl)
       .setName('Connected destination')
       .setDesc(`${this.plugin.settings.destinationName} · Destination ID: ${this.plugin.settings.destinationId}`)
@@ -198,58 +190,27 @@ class HtmlToMdSettingTab extends PluginSettingTab {
   }
 
   private displayRegistration(): void {
-    let adminToken = ''
+    let link = ''
     new Setting(this.containerEl)
-      .setName('Connect this vault')
-      .setDesc(`Select an existing iPhone capture destination for “${this.app.vault.getName()}”. The admin token is used once and is not saved.`)
+      .setName('Vault connection link')
+      .setDesc(
+        'Open the htmltomd server page, choose Connect Obsidian on the capture destination, and paste the link it shows. '
+        + 'The administration token is never needed here.',
+      )
       .addText((text) => {
-        text.setPlaceholder('ADMIN_TOKEN').onChange((value) => { adminToken = value })
+        text.setPlaceholder('htmltomd://vault?...').onChange((value) => { link = value })
         text.inputEl.type = 'password'
       })
-      .addButton((button) => button.setButtonText('Load destinations').setCta().onClick(async () => {
+      .addButton((button) => button.setButtonText('Connect').setCta().onClick(async () => {
         button.setDisabled(true)
         try {
-          const destinations = await this.plugin.listCaptureDestinations(adminToken)
-          destinationSettings.empty()
-          if (destinations.length === 0) {
-            new Setting(destinationSettings)
-              .setName('No capture destinations')
-              .setDesc('Open the htmltomd server page and create an iPhone Shortcut first.')
-            return
-          }
-          let destinationId = destinations[0]?.id ?? ''
-          new Setting(destinationSettings)
-            .setName('Capture destination')
-            .setDesc('Ready captures already in this destination will be imported after connection.')
-            .addDropdown((dropdown) => {
-              for (const destination of destinations) {
-                const connection = destination.vaultName === null ? 'not connected' : `connected to ${destination.vaultName}`
-                dropdown.addOption(destination.id, `${destination.name} (${connection})`)
-              }
-              dropdown.setValue(destinationId).onChange((value) => { destinationId = value })
-            })
-            .addButton((connectButton) => connectButton.setButtonText('Connect this vault').setCta().onClick(async () => {
-              const destination = destinations.find((candidate) => candidate.id === destinationId)
-              if (destination === undefined) return
-              if (destination.vaultName !== null && !window.confirm(
-                `${destination.name} is connected to ${destination.vaultName}. Reconnecting invalidates that plugin's sync credential. Continue?`,
-              )) return
-              connectButton.setDisabled(true)
-              try {
-                await this.plugin.connectVault(adminToken, destination.id)
-                adminToken = ''
-                this.display()
-              } catch (error) {
-                new Notice(`htmltomd connection failed: ${(error as Error).message}`)
-                connectButton.setDisabled(false)
-              }
-            }))
+          await this.plugin.connectVaultLink(link)
+          link = ''
+          this.display()
         } catch (error) {
-          new Notice(`htmltomd destination loading failed: ${(error as Error).message}`)
-        } finally {
+          new Notice(`htmltomd connection failed: ${(error as Error).message}`)
           button.setDisabled(false)
         }
       }))
-    const destinationSettings = this.containerEl.createDiv()
   }
 }
